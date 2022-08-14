@@ -5,7 +5,7 @@ import cv2
 from PIL import Image, ImageOps
 
 import numpy as np
-from sklearn import cluster, utils
+from sklearn import cluster
 import pandas as pd
 
 import fire
@@ -110,7 +110,7 @@ class UtilsCli(object):
         df = pd.DataFrame({"filename" : files, "labels": [-1] * len(files)})
         df.to_csv(output_path)
 
-    def pickle_data(self, input_path:str="./label.csv", output_path="./data.pkl"):
+    def pickle_data(self, input_path:str="./label.csv", output_path="./data.pkl", pickle_protocol:int=pickle.HIGHEST_PROTOCOL):
         tqdm.pandas()
         df_label = pd.read_csv(input_path, index_col=0)
         df_label = df_label[df_label.labels >= 0]
@@ -119,11 +119,12 @@ class UtilsCli(object):
         df_label = df_label[["X", "labels"]]
         X = df_label.X.values
         y = df_label.labels.values
-        data = utils.Bunch()
-        data["X"] = X
-        data["y"] = y
+        data = {
+            "X": X,
+            "y": y
+        }
         with open(output_path, "wb") as f:
-            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(data, f, protocol=pickle_protocol)
 
 if __name__ == "__main__":
     utils_cli = UtilsCli()
