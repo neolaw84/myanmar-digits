@@ -1,10 +1,11 @@
+import pickle
 from glob import glob
 
 import cv2
 from PIL import Image, ImageOps
 
 import numpy as np
-from sklearn import cluster
+from sklearn import cluster, utils
 import pandas as pd
 
 import fire
@@ -66,6 +67,7 @@ def get_digit(np_sample, points_X, ys, cluster_id, width=256, height=256):
     en_x, en_y = min(np_sample.shape[1], st_x + width), min(np_sample.shape[0], st_y + height)
     return np_sample[st_y:en_y, st_x: en_x]
 
+
 IMAGE_DATA_TYPES = ["jpg", "jpeg", "png", "JPG", "JPEG", "PNG"]
 
 class UtilsCli(object):
@@ -107,6 +109,21 @@ class UtilsCli(object):
         files = glob("{}/*.png".format(input_path))
         df = pd.DataFrame({"filename" : files, "labels": [-1] * len(files)})
         df.to_csv(output_path)
+
+    def pickle_data(self, input_path:str="./label.csv", output_path="./data.pkl"):
+        tqdm.pandas()
+        df_label = pd.read_csv(input_path, index_col=0)
+        df_label = df_label[df_label.labels >= 0]
+        df_label["X"] = df_label.progress_apply(lambda x : load_gray_image(x.filename), axis=1)
+        df_label.drop(columns="filename", inplace=True)
+        df_label = df_label[["X", "labels"]]
+        X = df_label.X.values
+        y = df_label.labels.values
+        data = utils.Bunch()
+        data["X"] = X
+        data["y"] = y
+        with open(output_path, "wb") as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 if __name__ == "__main__":
     utils_cli = UtilsCli()
