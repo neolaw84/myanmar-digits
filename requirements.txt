@@ -1,0 +1,9 @@
+scipy 
+numpy 
+scikit-learn 
+matplotlib 
+pandas
+pillow 
+opencv-python
+fire
+tqdm
