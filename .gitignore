@@ -129,6 +129,6 @@ dmypy.json
 .pyre/
 
 data
-data_kmeans
+data_labelled
 
 .vscode
