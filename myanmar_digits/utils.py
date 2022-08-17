@@ -1,5 +1,7 @@
 import os
 import pickle
+import shutil
+from pathlib import Path
 from glob import glob
 
 import cv2
@@ -84,7 +86,7 @@ def get_digit(np_sample, points_X, ys, cluster_id, width=256, height=256):
         digit = np.vstack((digit, np.full((bottom_fill, digit.shape[1]), 255)))
 
     assert digit.shape == (height, width)
-    return digit, cy/np_sample.shape[1], cx/np_sample.shape[0]
+    return digit, cy/np_sample.shape[0], cx/np_sample.shape[1]
 
 def correct_filename(x:str):
     if os.path.sep != "\\":
@@ -92,9 +94,29 @@ def correct_filename(x:str):
     return x
 
 IMAGE_DATA_TYPES = ["jpg", "jpeg", "png", "JPG", "JPEG", "PNG"]
+NUM_CLASSES = 10
+
+def load_data(num_classes:int=NUM_CLASSES, return_X_y:bool=True, as_frame:bool=True, data_path:str="./data.pkl"):
+    with open (data_path, "rb") as f:
+        data = pickle.load(f)
+        X = data["X"]
+        y = data["y"]
+    selector = y < num_classes
+    _X = X[selector, :, :].reshape((-1, 48*48))
+    _y = y[selector]
+    if as_frame:
+        _X = pd.DataFrame(data=_X, columns=["p_{}".format(str(i).zfill(5)) for i in range(0, 48*48)])
+        _y = pd.Series(_y)
+    if return_X_y:
+        return _X, _y
+    else:
+        return {
+            "X" : _X, 
+            "y" : _y
+        }
 
 class UtilsCli(object):
-    def chop_images(self, input_path:str="./raw_data", output_path:str="./data", pseudo_label_path:str="./pseudo_label.csv"):
+    def chop_images(self, input_path:str="./raw_data", output_path:str="./chopped_data", pseudo_label_path:str="./chopped_data_info.csv"):
         """
         Chops up raw_data/* to individual images in ./data
         """
@@ -103,21 +125,21 @@ class UtilsCli(object):
             files.extend(glob("{}/*.{}".format(input_path, idt)))
         pbar = tqdm(files)
         offset = 0
-        fids, cxs = [], []
+        fids, cxs, cys, sources, num_clusters = [], [], [], [], []
+        opath = Path(output_path)
+        opath.mkdir(parents=True, exist_ok=True)
         for f in pbar:
             pbar.set_description("working on file : {}; init ...".format(f))
             img = load_gray_image(f)
             img_norm = normalize(img)
-            img_enh = enhance(img_norm, copy=False)
+            img_enh = enhance(img_norm, thr=96, copy=False)
             pbar.set_description("working on file : {}; mser ... ".format(f))
-            points_X = get_mser_regions(img_enh, delta=5, copy=False)
+            points_X = get_mser_regions(img_enh, delta=10, copy=False)
             points_X = np.unique(points_X, axis=0)
-            selector = img_enh[points_X[:, 1], points_X[:, 0]] >= MAX_COLOR - 32
-            points_X = points_X[selector]
-            pbar.set_description("working on file : {}; points_X.shape : {};".format(f, points_X.shape))
-            dbscan = cluster.DBSCAN(eps=2.0, min_samples=5)
+            #selector = img_enh[points_X[:, 1], points_X[:, 0]] >= MAX_COLOR - 32
+            #points_X = points_X[selector]
+            dbscan = cluster.DBSCAN(eps=2.0, min_samples=10)
             ys = dbscan.fit_predict(points_X)
-            pbar.set_description("working on file : {}; points_X.shape : {}; num_clusters : {}".format(f, points_X.shape, ys.shape))
             for id in range(ys.min(), ys.max()):
                 try:
                     _img, _cy, _cx = get_digit(img, points_X, ys, id, width=64+32, height=64+32)
@@ -126,27 +148,50 @@ class UtilsCli(object):
                     _img.save("{}/{}".format(output_path, fid))
                     fids.append(fid)
                     cxs.append(_cx)
+                    cys.append(_cy)
                 except Exception as e:
                     pass
+            sources.extend([f] * (len(fids) - len(sources)))
+            num_clusters.extend([ys.max()] * (len(fids) - len(num_clusters)))
+            assert len(fids) == len(cxs) == len(cys) == len(sources) == len(cys)
             offset = offset + ys.max() #ys.shape[0]
-        df = pd.DataFrame({"fid" : fids, "cx" : cxs})
+        assert len(fids) == len(cxs) == len(cys) == len(sources) == len(cys)
+        df = pd.DataFrame({
+            "fid" : fids, "cx" : cxs, "cy" : cys, "source" : sources, "num_clusters" : num_clusters
+        })
         df.to_csv(pseudo_label_path)
 
-    def prepare_label_csv(self, input_path:str="./data", output_path="./data/label.csv"):
-        files = glob("{}/*.png".format(input_path))
-        df = pd.DataFrame({"filename" : files, "labels": [-1] * len(files)})
-        df.to_csv(output_path)
+    def prepare_pseudo_label_data(self, input_path:str="./chopped_data/", info_path:str="./chopped_data_info.csv", output_path="./pseudo_label_data"):
+        df_all = pd.read_csv(info_path, index_col=0)
+        for _, df in tqdm(df_all.groupby(by="source")):
+            df.sort_values(by="cx", inplace=True)
+            df.reset_index(inplace=True)
+            num_samples = df.shape[0]
+            k = num_samples // NUM_CLASSES
+            for l in tqdm(range(0, NUM_CLASSES)):
+                fnames = df.fid[l*k: (l+1)*k] if l < NUM_CLASSES - 1 else df.fid[l*k: ]
+                dp = Path(output_path).joinpath(str(l))
+                dp.mkdir(parents=True, exist_ok=True)
+                for f in fnames:
+                    sp = Path(input_path).joinpath(f)
+                    shutil.copy(str(sp), str(dp))
 
-    def pickle_data(self, input_path:str="./label.csv", output_path="./data.pkl", pickle_protocol:int=pickle.HIGHEST_PROTOCOL):
+    def pickle_data(self, input_path:str="./labelled_data", output_path="./data.pkl", pickle_protocol:int=pickle.HIGHEST_PROTOCOL):
         tqdm.pandas()
-        df_label = pd.read_csv(input_path, index_col=0)
-        df_label = df_label[df_label.labels >= 0]
-        df_label["filename"] = df_label.filename.apply(lambda x : correct_filename(x))
-        df_label["X"] = df_label.progress_apply(lambda x : load_gray_image(x.filename), axis=1)
-        df_label.drop(columns="filename", inplace=True)
-        df_label = df_label[["X", "labels"]]
-        X = df_label.X.values
-        y = df_label.labels.values
+        files = glob("{}/?/*.png".format(input_path))
+        X = np.zeros((len(files), 48, 48))
+        y = np.full(len(files), fill_value=-1)
+        for idx, f in enumerate(tqdm(files)):
+            f_parts = f.split("/")
+            y[idx] = int(f_parts[-2])
+            _X = load_gray_image(f, return_type="pillow")
+            _X = _X.resize((48, 48), resample=Image.BICUBIC)
+            _X = np.array(_X)
+            _X_norm = normalize(_X)
+            _X_enh = enhance(_X_norm, thr=96)
+            _X_inv = 255 - _X_enh
+            X[idx] = _X_inv
+
         data = {
             "X": X,
             "y": y
