@@ -132,4 +132,7 @@ data
 *_data
 data_*
 
+**/*_data_*
+
 .vscode
+

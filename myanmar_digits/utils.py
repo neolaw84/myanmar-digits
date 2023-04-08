@@ -4,6 +4,8 @@ import shutil
 from pathlib import Path
 from glob import glob
 
+from typing import List, Union
+
 import cv2
 from PIL import Image, ImageOps
 
@@ -123,6 +125,7 @@ class UtilsCli(object):
         files = []
         for idt in IMAGE_DATA_TYPES:
             files.extend(glob("{}/*.{}".format(input_path, idt)))
+        files.sort()
         pbar = tqdm(files)
         offset = 0
         fids, cxs, cys, sources, num_clusters = [], [], [], [], []
@@ -132,17 +135,17 @@ class UtilsCli(object):
             pbar.set_description("working on file : {}; init ...".format(f))
             img = load_gray_image(f)
             img_norm = normalize(img)
-            img_enh = enhance(img_norm, thr=96, copy=False)
+            img_enh = enhance(img_norm, thr=128, copy=False)
             pbar.set_description("working on file : {}; mser ... ".format(f))
-            points_X = get_mser_regions(img_enh, delta=10, copy=False)
+            points_X = get_mser_regions(img_enh, delta=15, copy=False)
             points_X = np.unique(points_X, axis=0)
             #selector = img_enh[points_X[:, 1], points_X[:, 0]] >= MAX_COLOR - 32
             #points_X = points_X[selector]
-            dbscan = cluster.DBSCAN(eps=2.0, min_samples=10)
+            dbscan = cluster.DBSCAN(eps=4.0, min_samples=15)
             ys = dbscan.fit_predict(points_X)
             for id in range(ys.min(), ys.max()):
                 try:
-                    _img, _cy, _cx = get_digit(img, points_X, ys, id, width=64+32, height=64+32)
+                    _img, _cy, _cx = get_digit(img, points_X, ys, id, width=64+64, height=64+64)
                     _img = Image.fromarray(_img, mode="L")
                     fid = "img_{}.png".format(str(id + offset).zfill(6))
                     _img.save("{}/{}".format(output_path, fid))
@@ -176,9 +179,14 @@ class UtilsCli(object):
                     sp = Path(input_path).joinpath(f)
                     shutil.copy(str(sp), str(dp))
 
-    def pickle_data(self, input_path:str="./labelled_data", output_path="./data.pkl", pickle_protocol:int=pickle.HIGHEST_PROTOCOL):
+    def pickle_data(self, input_path:Union[List, str]="./labelled_data", output_path="./data.pkl", pickle_protocol:int=pickle.DEFAULT_PROTOCOL):
         tqdm.pandas()
-        files = glob("{}/?/*.png".format(input_path))
+        if isinstance(input_path, str):
+            files = glob("{}/?/*.png".format(input_path))
+        else:
+            files = []
+            for ip in input_path:
+                files.extend(glob("{}/?/*.png".format(ip)))
         X = np.zeros((len(files), 48, 48))
         y = np.full(len(files), fill_value=-1)
         for idx, f in enumerate(tqdm(files)):
